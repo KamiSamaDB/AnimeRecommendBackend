@@ -4,30 +4,47 @@ This file adapts the Flask app for Vercel's serverless environment.
 """
 import sys
 import os
+from pathlib import Path
 
-# Add the project root to Python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+# Add the project root to Python path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-# Import the Flask app
-from src.api.app import AnimeRecommendationAPI
+try:
+    # Import the Flask app
+    from src.api.app import AnimeRecommendationAPI
+    
+    # Create the Flask app instance
+    api_instance = AnimeRecommendationAPI()
+    app = api_instance.app
+    
+except ImportError as e:
+    # Fallback: Create a simple Flask app if imports fail
+    from flask import Flask, jsonify
+    from flask_cors import CORS
+    
+    app = Flask(__name__)
+    CORS(app)
+    
+    @app.route('/health')
+    def health():
+        return jsonify({
+            "status": "ok",
+            "message": "API is running (fallback mode)",
+            "error": f"Import error: {str(e)}"
+        })
+    
+    @app.route('/api/recommendations', methods=['POST'])
+    def recommendations():
+        return jsonify({
+            "status": "error",
+            "message": "Service temporarily unavailable",
+            "error": "Import configuration issue"
+        }), 503
 
-# Create the Flask app instance
-api_instance = AnimeRecommendationAPI()
-app = api_instance.app
+# Export for Vercel
+application = app
 
-# This is the handler function that Vercel calls
-def handler(request):
-    """
-    Vercel serverless function handler.
-    This function will be called for each HTTP request.
-    """
-    return app(request.environ, lambda status, headers: None)
-
-# For Vercel, we need to export the app
-# Vercel looks for either 'app' or a function as the default export
+# For local testing
 if __name__ == "__main__":
-    # This allows local testing
     app.run(debug=True)
-else:
-    # This is the export for Vercel
-    application = app

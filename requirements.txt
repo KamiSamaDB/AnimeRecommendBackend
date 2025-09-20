@@ -1,21 +1,7 @@
-# Core Flask dependencies
+# Core Flask dependencies (essential)
 flask==2.3.3
 flask-cors==4.0.0
 requests==2.31.0
 
-# Data processing (essential for simple algorithm)
-numpy==1.24.3
-
-# Optional ML dependencies (only needed for full ML algorithm)
-pandas==2.0.3
-scikit-learn==1.3.0
-sentence-transformers==2.2.2
-
 # Utility dependencies
 python-dotenv==1.0.0
-jikan4==3.4.0
-beautifulsoup4==4.12.2
-lxml==4.9.3
-
-# Vercel deployment optimization
-gunicorn==21.2.0

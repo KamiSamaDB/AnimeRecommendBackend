@@ -295,16 +295,28 @@ vercel --prod
 
 #### Checking Deployment Success
 1. **Vercel Dashboard**: Visit [vercel.com/dashboard](https://vercel.com/dashboard)
-2. **Test Health Endpoint**:
+2. **Disable Deployment Protection** (for API access):
+   - Go to Project Settings → Deployment Protection
+   - Turn off protection for public API access
+3. **Test Health Endpoint**:
    ```bash
-   curl https://your-app-name.vercel.app/health
+   curl https://anime-recommend-backend.vercel.app/health
    ```
-3. **Test API Endpoint**:
+4. **Test API Endpoint**:
    ```bash
-   curl -X POST https://your-app-name.vercel.app/api/recommendations \
+   curl -X POST https://anime-recommend-backend.vercel.app/api/recommendations \
    -H "Content-Type: application/json" \
    -d '{"user_anime_list": [1, 5, 16], "max_recommendations": 5}'
    ```
+
+#### Your Deployed URLs
+- **Production**: `https://anime-recommend-backend.vercel.app`
+- **Latest Preview**: `https://anime-recommend-backend-2tsxy8qge-kamisamadbs-projects.vercel.app`
+
+#### Troubleshooting Vercel Issues
+- **Authentication Required**: Disable "Deployment Protection" in Vercel project settings
+- **Import Errors**: The API includes fallback error handling for serverless environment
+- **Build Failures**: Check the minimal `requirements.txt` contains only essential dependencies
 
 #### Environment Variables (Optional)
 If you need environment variables, set them in Vercel:
@@ -359,8 +371,8 @@ REACT_APP_API_URL=http://localhost:5000
 // Before (hardcoded localhost)
 const API_BASE_URL = 'http://localhost:5000';
 
-// After (environment-based)
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+// After (production ready)
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://anime-recommend-backend.vercel.app';
 
 // Example recommendation function
 const getRecommendations = async (userAnimeList) => {

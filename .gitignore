@@ -245,3 +245,4 @@ coverage_reports/
 
 # Documentation build
 docs/_build/
+.vercel
