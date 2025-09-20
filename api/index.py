@@ -218,17 +218,25 @@ class SimpleRecommendationEngine:
                 print(f"Error calculating similarity for {anime.get('title', 'Unknown')}: {e}")
                 similarity_score = 0.1  # Default low score
             
-            # More strict filtering - require stronger similarity or genre match
+            # More flexible filtering - adjust thresholds for better results
             anime_genres = {genre.get("name", "") for genre in anime.get("genres", []) if genre.get("name")}
             has_genre_match = bool(anime_genres.intersection(set(user_genres.keys())))
             
-            # Different thresholds based on genre matching
+            # Adjusted thresholds to prevent empty results
             if has_genre_match:
-                min_similarity = 0.3  # Lower threshold if genres match
+                min_similarity = 0.25  # Lowered from 0.3
             else:
-                min_similarity = 0.6  # Higher threshold for non-genre matches
+                min_similarity = 0.45  # Lowered from 0.6
             
             if similarity_score >= min_similarity:
+                # Check for NSFW content and filter it out
+                rating = anime.get("rating", "")
+                is_nsfw = self.is_nsfw_content(anime)
+                
+                if is_nsfw:
+                    print(f"Filtered NSFW content: {anime.get('title', 'Unknown')} (Rating: {rating})")
+                    continue  # Skip this anime
+                
                 # Generate recommendation reason
                 try:
                     reason = self.generate_recommendation_reason(
@@ -436,6 +444,55 @@ class SimpleRecommendationEngine:
             final_recs.extend(remaining_recs[:remaining_slots])
         
         return final_recs
+    
+    def is_nsfw_content(self, anime):
+        """Check if anime contains NSFW content based on rating and genres."""
+        try:
+            # Check rating for NSFW indicators
+            rating = anime.get("rating", "").lower()
+            nsfw_ratings = [
+                "r+",           # Mild Nudity
+                "rx",           # Hentai 
+                "hentai",       # Explicit
+                "18+",          # Adult
+                "mature"        # Mature content
+            ]
+            
+            # Check if any NSFW rating is present
+            if any(nsfw_rating in rating for nsfw_rating in nsfw_ratings):
+                return True
+            
+            # Check genres for NSFW content
+            genres = [genre.get("name", "").lower() for genre in anime.get("genres", [])]
+            nsfw_genres = [
+                "hentai",
+                "ecchi",        # Might be borderline but often NSFW
+                "yaoi",         # Adult BL content
+                "yuri"          # Adult GL content (some might be SFW but safer to filter)
+            ]
+            
+            # Check if any NSFW genre is present
+            if any(nsfw_genre in " ".join(genres) for nsfw_genre in nsfw_genres):
+                return True
+            
+            # Check title for obvious NSFW indicators (as a last resort)
+            title = anime.get("title", "").lower()
+            nsfw_title_indicators = [
+                "hentai",
+                "ecchi",
+                "18+",
+                "adult"
+            ]
+            
+            if any(indicator in title for indicator in nsfw_title_indicators):
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Error checking NSFW status for {anime.get('title', 'Unknown')}: {e}")
+            # If we can't determine, err on the side of caution for unknown content
+            return False
 
 # Initialize services
 try:
@@ -554,9 +611,13 @@ def search():
         # Search using MAL service
         search_results = mal_service.search_anime(query, limit=limit)
         
-        # Format results
+        # Format results with NSFW filtering
         formatted_results = []
         for anime in search_results:
+            # Filter out NSFW content
+            if recommendation_engine and recommendation_engine.is_nsfw_content(anime):
+                continue
+                
             formatted_results.append({
                 "mal_id": anime.get("mal_id"),
                 "title": anime.get("title"),
@@ -608,9 +669,13 @@ def trending():
         # Get trending anime from MAL
         trending_anime = mal_service.get_top_anime(limit=limit)
         
-        # Format results
+        # Format results with NSFW filtering
         formatted_results = []
         for anime in trending_anime:
+            # Filter out NSFW content
+            if recommendation_engine and recommendation_engine.is_nsfw_content(anime):
+                continue
+                
             formatted_results.append({
                 "mal_id": anime.get("mal_id"),
                 "title": anime.get("title"),
