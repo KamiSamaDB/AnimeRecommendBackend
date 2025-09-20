@@ -556,7 +556,7 @@ def recommendations():
         if not isinstance(user_anime_list, list):
             return jsonify({
                 "status": "error",
-                "message": "user_anime_list must be a list of anime IDs"
+                "message": "user_anime_list must be a list of anime IDs or titles"
             }), 400
         
         if not user_anime_list:
@@ -565,23 +565,62 @@ def recommendations():
                 "message": "user_anime_list cannot be empty"
             }), 400
         
+        # Convert titles to IDs if needed
+        processed_anime_list = []
+        conversion_errors = []
+        
+        for anime in user_anime_list:
+            if isinstance(anime, int):
+                processed_anime_list.append(anime)
+            elif isinstance(anime, str):
+                try:
+                    # Try to convert to int first (in case it's a string number)
+                    anime_id = int(anime)
+                    processed_anime_list.append(anime_id)
+                except ValueError:
+                    # It's an anime title, search for it
+                    try:
+                        search_results = mal_service.search_anime(anime.strip(), limit=1)
+                        if search_results and len(search_results) > 0:
+                            anime_id = search_results[0]['mal_id']
+                            processed_anime_list.append(anime_id)
+                            print(f"Converted title '{anime}' to ID {anime_id}")
+                        else:
+                            conversion_errors.append(f"Could not find anime with title: '{anime}'")
+                    except Exception as e:
+                        conversion_errors.append(f"Error searching for '{anime}': {str(e)}")
+            else:
+                conversion_errors.append(f"Invalid anime entry: {anime} (must be ID or title)")
+        
+        # If we have conversion errors, include them in response but continue with found anime
+        if conversion_errors:
+            print(f"Title conversion errors: {conversion_errors}")
+        
+        # If no valid anime found after conversion, return error
+        if not processed_anime_list:
+            return jsonify({
+                "status": "error",
+                "message": "No valid anime found after processing titles/IDs",
+                "conversion_errors": conversion_errors
+            }), 400
+        
         # Get recommendations using the recommendation engine
         start_time = time.time()
         recommendations_list = recommendation_engine.get_recommendations(
-            user_anime_list=user_anime_list,
+            user_anime_list=processed_anime_list,
             max_recommendations=max_recommendations
         )
         processing_time = round(time.time() - start_time, 2)
         
         # Fallback if no recommendations found (prevent empty array for React)
         if not recommendations_list:
-            print(f"No recommendations found for user list: {user_anime_list}, trying fallback...")
+            print(f"No recommendations found for user list: {processed_anime_list}, trying fallback...")
             try:
                 # Fallback: get some popular anime as basic recommendations
                 fallback_anime = mal_service.get_top_anime(limit=max_recommendations)
                 fallback_recommendations = []
                 for anime in fallback_anime[:max_recommendations]:
-                    if anime.get("mal_id") not in user_anime_list:
+                    if anime.get("mal_id") not in processed_anime_list:
                         # Filter NSFW from fallback too
                         if not recommendation_engine.is_nsfw_content(anime):
                             fallback_recommendations.append({
@@ -613,15 +652,25 @@ def recommendations():
                 print(f"Fallback also failed: {fallback_error}")
                 
         # Format response
-        return jsonify({
+        response_data = {
             "status": "success",
             "recommendations": recommendations_list,
             "total_found": len(recommendations_list),
-            "input_anime_count": len(user_anime_list),
+            "input_anime_count": len(processed_anime_list),
             "processing_time": processing_time,
             "algorithm": "Advanced Similarity Algorithm with NSFW filtering and fallback",
             "fallback_used": len(recommendations_list) > 0 and all(rec.get("reason") == "Popular anime recommendation" for rec in recommendations_list)
-        })
+        }
+        
+        # Add conversion info if there were title conversions or errors
+        if conversion_errors or any(isinstance(anime, str) for anime in user_anime_list):
+            response_data["title_conversion"] = {
+                "original_count": len(user_anime_list),
+                "processed_count": len(processed_anime_list),
+                "conversion_errors": conversion_errors
+            }
+        
+        return jsonify(response_data)
         
     except Exception as e:
         return jsonify({
