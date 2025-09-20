@@ -16,15 +16,15 @@ from flask_cors import CORS
 # Create Flask app
 app = Flask(__name__)
 
-# CORS configuration
+# CORS configuration - Enhanced for React compatibility
 CORS(app, resources={
     r"/*": {
         "origins": "*",
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
-        "expose_headers": ["Content-Type", "X-Total-Count"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "X-Api-Key"],
+        "expose_headers": ["Content-Type", "X-Total-Count", "X-Processing-Time"],
         "supports_credentials": False,
-        "max_age": 86400
+        "max_age": 600
     }
 })
 
@@ -573,6 +573,45 @@ def recommendations():
         )
         processing_time = round(time.time() - start_time, 2)
         
+        # Fallback if no recommendations found (prevent empty array for React)
+        if not recommendations_list:
+            print(f"No recommendations found for user list: {user_anime_list}, trying fallback...")
+            try:
+                # Fallback: get some popular anime as basic recommendations
+                fallback_anime = mal_service.get_top_anime(limit=max_recommendations)
+                fallback_recommendations = []
+                for anime in fallback_anime[:max_recommendations]:
+                    if anime.get("mal_id") not in user_anime_list:
+                        # Filter NSFW from fallback too
+                        if not recommendation_engine.is_nsfw_content(anime):
+                            fallback_recommendations.append({
+                                "mal_id": anime.get("mal_id"),
+                                "title": anime.get("title", "Unknown"),
+                                "score": anime.get("score", 0),
+                                "genres": [g.get("name") for g in anime.get("genres", [])],
+                                "year": anime.get("year"),
+                                "similarity_score": 0.5,  # Default similarity
+                                "reason": "Popular anime recommendation",
+                                "image_url": anime.get("images", {}).get("jpg", {}).get("image_url"),
+                                "synopsis": anime.get("synopsis", "")[:200] + "..." if anime.get("synopsis") else "",
+                                "rank": anime.get("rank"),
+                                "popularity": anime.get("popularity"),
+                                "members": anime.get("members"),
+                                "favorites": anime.get("favorites"),
+                                "scored_by": anime.get("scored_by"),
+                                "status": anime.get("status"),
+                                "episodes": anime.get("episodes"),
+                                "duration": anime.get("duration"),
+                                "rating": anime.get("rating"),
+                                "source": anime.get("source"),
+                                "studios": [studio.get("name") for studio in anime.get("studios", [])],
+                                "aired": anime.get("aired", {}).get("string")
+                            })
+                recommendations_list = fallback_recommendations[:max_recommendations]
+                print(f"Using fallback recommendations: {len(recommendations_list)} items")
+            except Exception as fallback_error:
+                print(f"Fallback also failed: {fallback_error}")
+                
         # Format response
         return jsonify({
             "status": "success",
@@ -580,7 +619,8 @@ def recommendations():
             "total_found": len(recommendations_list),
             "input_anime_count": len(user_anime_list),
             "processing_time": processing_time,
-            "algorithm": "Simple Similarity Algorithm with real MAL data"
+            "algorithm": "Advanced Similarity Algorithm with NSFW filtering and fallback",
+            "fallback_used": len(recommendations_list) > 0 and all(rec.get("reason") == "Popular anime recommendation" for rec in recommendations_list)
         })
         
     except Exception as e:
