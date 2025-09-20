@@ -135,27 +135,40 @@ class SimpleRecommendationEngine:
         candidate_pools = []
         
         # 1. Get diverse anime from different popularity ranges
-        candidate_pools.extend(self.mal_service.get_top_anime(limit=25))  # Top rated
+        candidate_pools.extend(self.mal_service.get_top_anime(limit=30))  # Top rated
         
-        # 2. Search by user's favorite genres
-        for genre_name, count in top_user_genres[:3]:
+        # 2. Search by user's favorite genres for more diversity
+        for genre_name, count in top_user_genres[:2]:  # Limit to top 2 genres to avoid too many API calls
             try:
-                genre_results = self.mal_service.search_anime(genre_name, limit=15)
+                # Search for anime with this genre
+                genre_results = self.mal_service.search_anime(f"{genre_name} anime", limit=10)
                 candidate_pools.extend(genre_results)
-            except:
+            except Exception as e:
+                print(f"Error searching for genre {genre_name}: {e}")
                 continue
         
-        # 3. Get some seasonal/current anime for variety
+        # 3. Add some variety with different search terms
         try:
-            seasonal_anime = self.mal_service.get_seasonal_anime()[:20] if hasattr(self.mal_service, 'get_seasonal_anime') else []
-            candidate_pools.extend(seasonal_anime)
-        except:
-            pass
+            variety_searches = ["popular anime", "new anime", "best anime"]
+            for search_term in variety_searches:
+                variety_results = self.mal_service.search_anime(search_term, limit=8)
+                candidate_pools.extend(variety_results)
+        except Exception as e:
+            print(f"Error in variety search: {e}")
+        
+        # Remove duplicates while preserving order
+        seen_ids = set()
+        unique_candidates = []
+        for anime in candidate_pools:
+            anime_id = anime.get("mal_id")
+            if anime_id and anime_id not in seen_ids:
+                unique_candidates.append(anime)
+                seen_ids.add(anime_id)
         
         # Process all candidates
-        print(f"Processing {len(candidate_pools)} candidate anime...")
+        print(f"Processing {len(unique_candidates)} unique candidate anime...")
         
-        for anime in candidate_pools:
+        for anime in unique_candidates:
             anime_id = anime.get("mal_id")
             if not anime_id or anime_id in user_anime_list or anime_id in seen_anime_ids:
                 continue
@@ -163,16 +176,24 @@ class SimpleRecommendationEngine:
             seen_anime_ids.add(anime_id)
             
             # Calculate comprehensive similarity score
-            similarity_score = self.calculate_similarity_score(
-                anime, user_genres, user_scores, user_popularity_scores, user_studios,
-                avg_user_score, avg_user_popularity
-            )
+            try:
+                similarity_score = self.calculate_similarity_score(
+                    anime, user_genres, user_scores, user_popularity_scores, user_studios,
+                    avg_user_score, avg_user_popularity
+                )
+            except Exception as e:
+                print(f"Error calculating similarity for {anime.get('title', 'Unknown')}: {e}")
+                similarity_score = 0.1  # Default low score
             
             if similarity_score > 0.1:  # Only include anime with meaningful similarity
                 # Generate recommendation reason
-                reason = self.generate_recommendation_reason(
-                    anime, user_genres, top_user_genres, top_user_studios, similarity_score
-                )
+                try:
+                    reason = self.generate_recommendation_reason(
+                        anime, user_genres, top_user_genres, top_user_studios, similarity_score
+                    )
+                except Exception as e:
+                    print(f"Error generating reason for {anime.get('title', 'Unknown')}: {e}")
+                    reason = "Recommended based on your preferences"
                 
                 recommendations.append({
                     "mal_id": anime_id,
@@ -210,107 +231,115 @@ class SimpleRecommendationEngine:
     def calculate_similarity_score(self, anime, user_genres, user_scores, user_popularity_scores, 
                                  user_studios, avg_user_score, avg_user_popularity):
         """Calculate comprehensive similarity score for an anime."""
-        score = 0.0
-        
-        # 1. Genre similarity (40% weight)
-        anime_genres = {genre.get("name") for genre in anime.get("genres", [])}
-        genre_score = 0.0
-        total_user_genre_count = sum(user_genres.values())
-        
-        for genre_name in anime_genres:
-            if genre_name in user_genres:
-                # Weight by how much user likes this genre
-                genre_weight = user_genres[genre_name] / total_user_genre_count
-                genre_score += genre_weight
-        
-        score += min(genre_score, 1.0) * 0.4
-        
-        # 2. Rating similarity (25% weight) 
-        anime_score = anime.get("score", 0)
-        if anime_score > 0 and avg_user_score > 0:
-            # Prefer anime with similar or slightly higher scores
-            score_diff = abs(anime_score - avg_user_score)
-            if score_diff <= 0.5:
-                score += 0.25
-            elif score_diff <= 1.0:
-                score += 0.20
-            elif score_diff <= 1.5:
-                score += 0.15
-            elif score_diff <= 2.0:
-                score += 0.10
-        
-        # 3. Popularity balance (20% weight)
-        anime_popularity = anime.get("popularity", 999999)
-        if anime_popularity > 0:
-            anime_pop_score = 1.0 / anime_popularity
-            # Balance between user preference and diversity
-            if avg_user_popularity > 0:
-                pop_ratio = min(anime_pop_score / avg_user_popularity, avg_user_popularity / anime_pop_score)
-                score += pop_ratio * 0.20
-            else:
-                # Default bonus for reasonably popular anime
-                if anime_popularity <= 1000:
+        try:
+            score = 0.0
+            
+            # 1. Genre similarity (40% weight)
+            anime_genres = {genre.get("name", "") for genre in anime.get("genres", []) if genre.get("name")}
+            genre_score = 0.0
+            total_user_genre_count = sum(user_genres.values()) if user_genres else 1
+            
+            for genre_name in anime_genres:
+                if genre_name in user_genres:
+                    # Weight by how much user likes this genre
+                    genre_weight = user_genres[genre_name] / total_user_genre_count
+                    genre_score += genre_weight
+            
+            score += min(genre_score, 1.0) * 0.4
+            
+            # 2. Rating similarity (25% weight) 
+            anime_score = anime.get("score", 0)
+            if anime_score and anime_score > 0 and avg_user_score > 0:
+                # Prefer anime with similar or slightly higher scores
+                score_diff = abs(anime_score - avg_user_score)
+                if score_diff <= 0.5:
+                    score += 0.25
+                elif score_diff <= 1.0:
+                    score += 0.20
+                elif score_diff <= 1.5:
                     score += 0.15
-                elif anime_popularity <= 5000:
+                elif score_diff <= 2.0:
                     score += 0.10
-        
-        # 4. Studio preference (10% weight)
-        anime_studios = {studio.get("name") for studio in anime.get("studios", [])}
-        for studio_name in anime_studios:
-            if studio_name in user_studios:
-                studio_weight = user_studios[studio_name] / len(user_studios)
-                score += studio_weight * 0.10
-                break  # Only count one studio match
-        
-        # 5. Quality bonus (5% weight)
-        members = anime.get("members", 0)
-        if members > 100000:  # Well-known anime
-            score += 0.03
-        if anime_score >= 8.0:  # High rated
-            score += 0.02
-        
-        return min(score, 1.0)  # Cap at 1.0
+            
+            # 3. Popularity balance (20% weight)
+            anime_popularity = anime.get("popularity", 999999)
+            if anime_popularity and anime_popularity > 0:
+                anime_pop_score = 1.0 / anime_popularity
+                # Balance between user preference and diversity
+                if avg_user_popularity > 0:
+                    pop_ratio = min(anime_pop_score / avg_user_popularity, avg_user_popularity / anime_pop_score)
+                    score += pop_ratio * 0.20
+                else:
+                    # Default bonus for reasonably popular anime
+                    if anime_popularity <= 1000:
+                        score += 0.15
+                    elif anime_popularity <= 5000:
+                        score += 0.10
+            
+            # 4. Studio preference (10% weight)
+            anime_studios = {studio.get("name", "") for studio in anime.get("studios", []) if studio.get("name")}
+            for studio_name in anime_studios:
+                if studio_name in user_studios:
+                    studio_weight = user_studios[studio_name] / len(user_studios) if user_studios else 0
+                    score += studio_weight * 0.10
+                    break  # Only count one studio match
+            
+            # 5. Quality bonus (5% weight)
+            members = anime.get("members", 0)
+            if members and members > 100000:  # Well-known anime
+                score += 0.03
+            if anime_score and anime_score >= 8.0:  # High rated
+                score += 0.02
+            
+            return min(score, 1.0)  # Cap at 1.0
+        except Exception as e:
+            print(f"Error in similarity calculation: {e}")
+            return 0.1  # Default low score
     
     def generate_recommendation_reason(self, anime, user_genres, top_user_genres, top_user_studios, similarity_score):
         """Generate a meaningful reason for the recommendation."""
-        reasons = []
-        
-        anime_genres = {genre.get("name") for genre in anime.get("genres", [])}
-        anime_studios = {studio.get("name") for studio in anime.get("studios", [])}
-        
-        # Check genre matches
-        genre_matches = []
-        for genre_name, count in top_user_genres[:3]:
-            if genre_name in anime_genres:
-                genre_matches.append(genre_name)
-        
-        if genre_matches:
-            if len(genre_matches) == 1:
-                reasons.append(f"Similar {genre_matches[0]} genre")
-            else:
-                reasons.append(f"Shares {', '.join(genre_matches[:2])} genres")
-        
-        # Check studio matches
-        for studio_name, count in top_user_studios[:2]:
-            if studio_name in anime_studios:
-                reasons.append(f"From {studio_name} studio")
-                break
-        
-        # Check rating
-        anime_score = anime.get("score", 0)
-        if anime_score >= 8.5:
-            reasons.append("Highly rated")
-        elif anime_score >= 8.0:
-            reasons.append("Well rated")
-        
-        # Check popularity
-        popularity = anime.get("popularity", 999999)
-        if popularity <= 100:
-            reasons.append("Very popular")
-        elif popularity <= 500:
-            reasons.append("Popular choice")
-        
-        return " • ".join(reasons) if reasons else "Recommended based on your preferences"
+        try:
+            reasons = []
+            
+            anime_genres = {genre.get("name", "") for genre in anime.get("genres", []) if genre.get("name")}
+            anime_studios = {studio.get("name", "") for studio in anime.get("studios", []) if studio.get("name")}
+            
+            # Check genre matches
+            genre_matches = []
+            for genre_name, count in (top_user_genres or [])[:3]:
+                if genre_name in anime_genres:
+                    genre_matches.append(genre_name)
+            
+            if genre_matches:
+                if len(genre_matches) == 1:
+                    reasons.append(f"Similar {genre_matches[0]} genre")
+                else:
+                    reasons.append(f"Shares {', '.join(genre_matches[:2])} genres")
+            
+            # Check studio matches
+            for studio_name, count in (top_user_studios or [])[:2]:
+                if studio_name in anime_studios:
+                    reasons.append(f"From {studio_name} studio")
+                    break
+            
+            # Check rating
+            anime_score = anime.get("score", 0)
+            if anime_score and anime_score >= 8.5:
+                reasons.append("Highly rated")
+            elif anime_score and anime_score >= 8.0:
+                reasons.append("Well rated")
+            
+            # Check popularity
+            popularity = anime.get("popularity", 999999)
+            if popularity and popularity <= 100:
+                reasons.append("Very popular")
+            elif popularity and popularity <= 500:
+                reasons.append("Popular choice")
+            
+            return " • ".join(reasons) if reasons else "Recommended based on your preferences"
+        except Exception as e:
+            print(f"Error generating reason: {e}")
+            return "Recommended based on your preferences"
     
     def ensure_diversity(self, recommendations, max_recommendations):
         """Ensure diversity in final recommendations."""
