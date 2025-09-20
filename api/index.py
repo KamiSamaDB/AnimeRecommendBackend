@@ -131,50 +131,63 @@ class SimpleRecommendationEngine:
         
         print(f"User preferences - Avg Score: {avg_user_score:.2f}, Top Genres: {[g[0] for g in top_user_genres[:3]]}")
         
-        # Gather candidate anime from multiple sources for diversity
+        # Gather candidate anime with user-focused approach
         candidate_pools = []
         
-        # 1. Get some top anime but not exclusively (reduced from 30 to 15)
-        candidate_pools.extend(self.mal_service.get_top_anime(limit=15))
-        
-        # 2. Search by user's favorite genres for more diversity
-        for genre_name, count in top_user_genres[:3]:  # Expanded to top 3 genres
+        # 1. Genre-focused search (primary source - 60% of candidates)
+        genre_candidates = []
+        for genre_name, count in top_user_genres[:3]:  # Top 3 user genres
             try:
-                # Search for anime with this genre using different approaches
+                # Multiple search approaches for each genre
                 search_terms = [
                     f"{genre_name} anime",
-                    f"best {genre_name}",
-                    f"{genre_name} recommendations"
+                    f"best {genre_name} anime",
+                    f"{genre_name.lower()}"
                 ]
-                for term in search_terms[:2]:  # Use first 2 search terms
+                for term in search_terms:
                     genre_results = self.mal_service.search_anime(term, limit=8)
-                    candidate_pools.extend(genre_results)
+                    genre_candidates.extend(genre_results)
             except Exception as e:
                 print(f"Error searching for genre {genre_name}: {e}")
                 continue
+        candidate_pools.extend(genre_candidates)
         
-        # 3. Add variety with different popularity ranges and types
-        try:
-            variety_searches = [
-                ("popular anime", 10),
-                ("underrated anime", 8), 
-                ("new anime", 8),
-                ("anime series", 8),
-                ("anime movies", 6)
-            ]
-            for search_term, limit in variety_searches:
-                variety_results = self.mal_service.search_anime(search_term, limit=limit)
-                candidate_pools.extend(variety_results)
-        except Exception as e:
-            print(f"Error in variety search: {e}")
+        # 2. Studio-based recommendations if user has clear preferences
+        studio_candidates = []
+        for studio_name, count in top_user_studios[:2]:
+            if count >= 2:  # Only if user has multiple anime from this studio
+                try:
+                    studio_results = self.mal_service.search_anime(f"{studio_name}", limit=6)
+                    studio_candidates.extend(studio_results)
+                except Exception as e:
+                    print(f"Error searching for studio {studio_name}: {e}")
+        candidate_pools.extend(studio_candidates)
         
-        # 4. Add some studio-based searches if user has studio preferences
+        # 3. Score-range targeted search (20% of candidates)
         try:
-            for studio_name, count in top_user_studios[:2]:
-                studio_results = self.mal_service.search_anime(f"{studio_name} anime", limit=6)
-                candidate_pools.extend(studio_results)
+            if avg_user_score >= 8.5:
+                score_results = self.mal_service.get_top_anime(limit=12)
+            elif avg_user_score >= 7.5:
+                score_results = self.mal_service.search_anime("popular anime", limit=12)
+            else:
+                score_results = self.mal_service.search_anime("good anime", limit=12)
+            candidate_pools.extend(score_results)
         except Exception as e:
-            print(f"Error in studio search: {e}")
+            print(f"Error in score-targeted search: {e}")
+        
+        # 4. Diversity searches (20% of candidates) - only if we have enough genre matches
+        if len(genre_candidates) < 30:  # Only add variety if genre search was limited
+            try:
+                variety_searches = [
+                    ("underrated anime", 6),
+                    ("hidden gems", 6), 
+                    ("recent anime", 6)
+                ]
+                for search_term, limit in variety_searches:
+                    variety_results = self.mal_service.search_anime(search_term, limit=limit)
+                    candidate_pools.extend(variety_results)
+            except Exception as e:
+                print(f"Error in variety search: {e}")
         
         # Remove duplicates while preserving order
         seen_ids = set()
@@ -205,7 +218,17 @@ class SimpleRecommendationEngine:
                 print(f"Error calculating similarity for {anime.get('title', 'Unknown')}: {e}")
                 similarity_score = 0.1  # Default low score
             
-            if similarity_score > 0.1:  # Only include anime with meaningful similarity
+            # More strict filtering - require stronger similarity or genre match
+            anime_genres = {genre.get("name", "") for genre in anime.get("genres", []) if genre.get("name")}
+            has_genre_match = bool(anime_genres.intersection(set(user_genres.keys())))
+            
+            # Different thresholds based on genre matching
+            if has_genre_match:
+                min_similarity = 0.3  # Lower threshold if genres match
+            else:
+                min_similarity = 0.6  # Higher threshold for non-genre matches
+            
+            if similarity_score >= min_similarity:
                 # Generate recommendation reason
                 try:
                     reason = self.generate_recommendation_reason(
@@ -254,57 +277,63 @@ class SimpleRecommendationEngine:
         try:
             score = 0.0
             
-            # 1. Genre similarity (50% weight - increased from 40%)
+            # 1. Genre similarity (60% weight - increased for more focus)
             anime_genres = {genre.get("name", "") for genre in anime.get("genres", []) if genre.get("name")}
             genre_score = 0.0
             total_user_genre_count = sum(user_genres.values()) if user_genres else 1
             
-            for genre_name in anime_genres:
-                if genre_name in user_genres:
-                    # Weight by how much user likes this genre
-                    genre_weight = user_genres[genre_name] / total_user_genre_count
-                    genre_score += genre_weight
-            
-            # Bonus for multiple genre matches
+            # Calculate genre overlap score
             genre_overlap_count = len(anime_genres.intersection(set(user_genres.keys())))
-            if genre_overlap_count >= 2:
-                genre_score += 0.2  # Bonus for multiple genre matches
             
-            score += min(genre_score, 1.0) * 0.5
+            if genre_overlap_count > 0:
+                # Base score from genre weights
+                for genre_name in anime_genres:
+                    if genre_name in user_genres:
+                        genre_weight = user_genres[genre_name] / total_user_genre_count
+                        genre_score += genre_weight
+                
+                # Bonus for multiple genre matches (stronger preference alignment)
+                if genre_overlap_count >= 2:
+                    genre_score += 0.3
+                elif genre_overlap_count >= 3:
+                    genre_score += 0.5
+            else:
+                # Heavy penalty for no genre matches
+                genre_score = 0.0
             
-            # 2. Rating similarity (20% weight - reduced from 25%) 
+            score += min(genre_score, 1.0) * 0.6
+            
+            # 2. Rating similarity (15% weight - reduced) 
             anime_score = anime.get("score", 0)
             if anime_score and anime_score > 0 and avg_user_score > 0:
-                # Prefer anime with similar ratings, but don't require extremely high scores
                 score_diff = abs(anime_score - avg_user_score)
                 if score_diff <= 0.5:
-                    score += 0.20
+                    score += 0.15
                 elif score_diff <= 1.0:
-                    score += 0.16
-                elif score_diff <= 1.5:
                     score += 0.12
+                elif score_diff <= 1.5:
+                    score += 0.09
                 elif score_diff <= 2.0:
-                    score += 0.08
-                # Even moderately rated anime can be good if genres match
-                elif anime_score >= 6.5:
-                    score += 0.05
+                    score += 0.06
+                # Slight bonus for decent anime even if score doesn't match perfectly
+                elif anime_score >= 7.0 and genre_overlap_count > 0:
+                    score += 0.03
             
-            # 3. Popularity balance (15% weight - reduced from 20%)
+            # 3. Popularity balance (15% weight)
             anime_popularity = anime.get("popularity", 999999)
             if anime_popularity and anime_popularity > 0:
                 anime_pop_score = 1.0 / anime_popularity
-                # More balanced approach to popularity
                 if avg_user_popularity > 0:
                     pop_ratio = min(anime_pop_score / avg_user_popularity, avg_user_popularity / anime_pop_score)
                     score += pop_ratio * 0.10
                 else:
-                    # Give credit to various popularity levels
+                    # Balanced approach to popularity
                     if anime_popularity <= 1000:
-                        score += 0.10
-                    elif anime_popularity <= 5000:
                         score += 0.08
+                    elif anime_popularity <= 5000:
+                        score += 0.06
                     elif anime_popularity <= 10000:
-                        score += 0.05
+                        score += 0.04
             
             # 4. Studio preference (10% weight)
             anime_studios = {studio.get("name", "") for studio in anime.get("studios", []) if studio.get("name")}
