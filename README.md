@@ -263,6 +263,151 @@ Common HTTP status codes:
 - `404`: Not Found
 - `500`: Internal Server Error
 
+## ☁️ Deployment Options
+
+### 🚀 Vercel Deployment (Recommended for React Apps)
+
+**Prerequisites:**
+- [Vercel CLI](https://vercel.com/cli) installed: `npm i -g vercel`
+- Vercel account (free tier available)
+- GitHub repository (recommended)
+
+#### Quick Deploy
+```bash
+# 1. Login to Vercel
+vercel login
+
+# 2. Deploy from project directory
+vercel
+
+# 3. Follow prompts:
+#    - Link to existing project? N
+#    - Project name: anime-recommender-api
+#    - Directory: ./
+#    - Override settings? N
+```
+
+#### Production Deploy
+```bash
+# Deploy to production
+vercel --prod
+```
+
+#### Checking Deployment Success
+1. **Vercel Dashboard**: Visit [vercel.com/dashboard](https://vercel.com/dashboard)
+2. **Test Health Endpoint**:
+   ```bash
+   curl https://your-app-name.vercel.app/health
+   ```
+3. **Test API Endpoint**:
+   ```bash
+   curl -X POST https://your-app-name.vercel.app/api/recommendations \
+   -H "Content-Type: application/json" \
+   -d '{"user_anime_list": [1, 5, 16], "max_recommendations": 5}'
+   ```
+
+#### Environment Variables (Optional)
+If you need environment variables, set them in Vercel:
+```bash
+vercel env add ENVIRONMENT_VARIABLE_NAME
+```
+
+### 🔵 Azure Deployment (Alternative)
+
+**Prerequisites:**
+- Azure account with active subscription
+- [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) installed
+
+#### Deploy to Azure App Service
+```bash
+# 1. Login to Azure
+az login
+
+# 2. Create resource group
+az group create --name anime-recommender-rg --location "East US"
+
+# 3. Create App Service plan
+az appservice plan create --name anime-recommender-plan --resource-group anime-recommender-rg --sku FREE --is-linux
+
+# 4. Create web app
+az webapp create --resource-group anime-recommender-rg --plan anime-recommender-plan --name your-anime-api --runtime "PYTHON|3.10" --deployment-local-git
+
+# 5. Configure startup command
+az webapp config set --resource-group anime-recommender-rg --name your-anime-api --startup-file "start_server.py"
+
+# 6. Deploy code
+git remote add azure https://your-anime-api.scm.azurewebsites.net:443/your-anime-api.git
+git push azure main
+```
+
+### 🌐 Updating Your React App for Production
+
+#### Environment Configuration
+**Create `.env` file in your React app:**
+```env
+# For local development
+REACT_APP_API_URL=http://localhost:5000
+
+# For production (update when deploying)
+# REACT_APP_API_URL=https://your-app-name.vercel.app
+```
+
+#### Updated API Integration
+**Replace your React API calls:**
+
+```javascript
+// Before (hardcoded localhost)
+const API_BASE_URL = 'http://localhost:5000';
+
+// After (environment-based)
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+
+// Example recommendation function
+const getRecommendations = async (userAnimeList) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/recommendations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_anime_list: userAnimeList,
+        max_recommendations: 10
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data.recommendations;
+  } catch (error) {
+    console.error('Error fetching recommendations:', error);
+    throw error;
+  }
+};
+
+// Example search function
+const searchAnime = async (query) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/search?q=${encodeURIComponent(query)}`);
+    if (!response.ok) throw new Error('Search failed');
+    return await response.json();
+  } catch (error) {
+    console.error('Search error:', error);
+    throw error;
+  }
+};
+```
+
+#### Production Checklist for React App
+- [ ] Update `REACT_APP_API_URL` in `.env.production`
+- [ ] Test API endpoints after deployment
+- [ ] Verify CORS is working between domains
+- [ ] Update any hardcoded localhost references
+- [ ] Test error handling for network failures
+
 ## 📈 Future Enhancements
 
 - [ ] User preference learning
