@@ -5,3 +5,6 @@ requests==2.31.0
 
 # Utility dependencies
 python-dotenv==1.0.0
+
+# Production WSGI server
+waitress==3.0.0

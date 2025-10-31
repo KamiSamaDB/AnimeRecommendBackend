@@ -1,5 +1,12 @@
 """
-Main application entry point for the Anime Recommendation System.
+WSGI entrypoint for the Anime Recommendation System.
+
+This module exposes a top-level ``app`` variable compatible with WSGI servers
+like waitress or gunicorn. You can run it on EC2 with:
+
+    waitress-serve --listen=0.0.0.0:5000 src.app:app
+
+It also retains a CLI-friendly ``main()`` for local development.
 """
 
 import os
@@ -13,11 +20,13 @@ sys.path.insert(0, str(src_dir))
 
 from api.app import AnimeRecommendationAPI
 
+# Create the API instance once at import time and expose the Flask app
+_api = AnimeRecommendationAPI()
+app = _api.app
+
 def main():
     """Main application entry point"""
-    # Create and run the API
-    api = AnimeRecommendationAPI()
-    
+    # Use the already created WSGI app instance
     # Get configuration from environment
     host = os.getenv('HOST', '0.0.0.0')
     port = int(os.getenv('PORT', 5000))
@@ -32,7 +41,7 @@ def main():
     print(f"Trending: http://{host}:{port}/api/trending")
     print("=" * 50)
     
-    api.run(host=host, port=port, debug=debug)
+    _api.run(host=host, port=port, debug=debug)
 
 if __name__ == '__main__':
     main()
