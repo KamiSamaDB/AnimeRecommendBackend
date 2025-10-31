@@ -214,11 +214,25 @@ temp/
 tmp/
 
 # Machine Learning models and data
-models/
+# Allow committing model artifacts under the root models/ directory
+# (Consider Git LFS for large files)
 *.pkl
 *.joblib
 *.h5
-*.model
+
+# Do NOT ignore the root models directory
+!models/
+!models/**
+
+# Unignore common model artifact types inside models/
+!models/**/*.pkl
+!models/**/*.joblib
+!models/**/*.h5
+
+# Ignore Python cache folders inside models
+models/**/__pycache__/
+
+# Still ignore raw data directories
 data/
 datasets/
 

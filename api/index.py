@@ -88,171 +88,145 @@ class SimpleRecommendationEngine:
         return self.anime_cache.get(anime_id)
     
     def get_recommendations(self, user_anime_list: List[int], max_recommendations: int = 10) -> List[Dict]:
-        """Generate recommendations based on user's anime list using comprehensive scoring."""
-        recommendations = []
-        seen_anime_ids = set()
+        """Generate truly unique recommendations based on specific user input combination."""
+        print(f"Generating unique recommendations for {len(user_anime_list)} anime...")
         
-        # Get user's anime details to understand preferences
-        user_genres = {}  # Genre -> count
-        user_scores = []
-        user_popularity_scores = []
-        user_studios = {}  # Studio -> count
+        # Step 1: Analyze user's anime to build unique taste profile
+        user_profile = {
+            'genres': {},
+            'studios': {},
+            'avg_score': 0,
+            'anime_titles': []
+        }
         
-        print(f"Analyzing user preferences from {len(user_anime_list)} anime...")
-        
-        for anime_id in user_anime_list[:10]:  # Analyze up to 10 user anime
+        user_anime_data = []
+        for anime_id in user_anime_list:
             anime_data = self.get_anime_details(anime_id)
             if anime_data:
-                # Extract genres with weights
+                user_anime_data.append(anime_data)
+                user_profile['anime_titles'].append(anime_data.get('title', ''))
+                
+                # Count genre frequencies
                 for genre in anime_data.get("genres", []):
                     genre_name = genre.get("name")
-                    user_genres[genre_name] = user_genres.get(genre_name, 0) + 1
+                    if genre_name:
+                        user_profile['genres'][genre_name] = user_profile['genres'].get(genre_name, 0) + 1
                 
-                # Get score preference
-                score = anime_data.get("score")
-                if score and score > 0:
-                    user_scores.append(score)
-                
-                # Get popularity preference (inverse of popularity rank - lower rank = more popular)
-                popularity = anime_data.get("popularity")
-                if popularity:
-                    user_popularity_scores.append(1.0 / popularity if popularity > 0 else 0)
-                
-                # Track preferred studios
+                # Count studio frequencies
                 for studio in anime_data.get("studios", []):
                     studio_name = studio.get("name")
-                    user_studios[studio_name] = user_studios.get(studio_name, 0) + 1
+                    if studio_name:
+                        user_profile['studios'][studio_name] = user_profile['studios'].get(studio_name, 0) + 1
         
         # Calculate user preferences
-        avg_user_score = sum(user_scores) / len(user_scores) if user_scores else 7.0
-        avg_user_popularity = sum(user_popularity_scores) / len(user_popularity_scores) if user_popularity_scores else 0.001
-        top_user_genres = sorted(user_genres.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_user_studios = sorted(user_studios.items(), key=lambda x: x[1], reverse=True)[:3]
+        scores = [a.get('score', 0) for a in user_anime_data if a.get('score', 0) > 0]
+        user_profile['avg_score'] = sum(scores) / len(scores) if scores else 7.0
         
-        print(f"User preferences - Avg Score: {avg_user_score:.2f}, Top Genres: {[g[0] for g in top_user_genres[:3]]}")
+        top_genres = sorted(user_profile['genres'].items(), key=lambda x: x[1], reverse=True)
+        preferred_studios = [s for s, c in user_profile['studios'].items() if c >= 2]
         
-        # Gather candidate anime with user-focused approach
-        candidate_pools = []
+        print(f"Unique profile: Top genres: {[g for g, c in top_genres[:3]]}, Preferred studios: {preferred_studios}")
         
-        # 1. Genre-focused search (primary source - 60% of candidates)
-        genre_candidates = []
-        for genre_name, count in top_user_genres[:3]:  # Top 3 user genres
+        # Step 2: Create targeted searches based on user's specific combination
+        search_queries = []
+        seen_anime_ids = set(user_anime_list)
+        
+        # Primary genre-based searches (more specific than generic)
+        if len(top_genres) >= 1:
+            primary_genre = top_genres[0][0]
+            search_queries.append(f"best {primary_genre} anime")
+            
+            # Add combination searches for multiple genres
+            if len(top_genres) >= 2:
+                secondary_genre = top_genres[1][0]
+                search_queries.append(f"{primary_genre} {secondary_genre}")
+        
+        # Studio-specific searches for strong preferences
+        for studio in preferred_studios[:1]:  # Limit to one studio search
+            search_queries.append(f"{studio} anime")
+        
+        # Score-tier specific search
+        if user_profile['avg_score'] >= 8.0:
+            search_queries.append("highly rated anime")
+        else:
+            search_queries.append("popular anime")
+        
+        # Limit total searches to prevent timeouts
+        search_queries = search_queries[:4]
+        print(f"Search queries: {search_queries}")
+        
+        # Step 3: Execute searches and collect unique candidates
+        all_candidates = []
+        
+        for query in search_queries:
             try:
-                # Multiple search approaches for each genre
-                search_terms = [
-                    f"{genre_name} anime",
-                    f"best {genre_name} anime",
-                    f"{genre_name.lower()}"
-                ]
-                for term in search_terms:
-                    genre_results = self.mal_service.search_anime(term, limit=8)
-                    genre_candidates.extend(genre_results)
+                print(f"Searching: {query}")
+                search_results = self.mal_service.search_anime(query, limit=10)
+                
+                for anime in search_results:
+                    anime_id = anime.get("mal_id")
+                    score = anime.get("score", 0)
+                    
+                    # Filter: must have rating, not in user's list, not NSFW
+                    if (anime_id and anime_id not in seen_anime_ids and 
+                        score and score > 0 and not self.is_nsfw_content(anime)):
+                        
+                        # Calculate relevance to user's profile
+                        relevance = self.calculate_relevance_score(anime, user_profile)
+                        anime['relevance_score'] = relevance
+                        anime['search_query'] = query
+                        
+                        all_candidates.append(anime)
+                        seen_anime_ids.add(anime_id)
+                
             except Exception as e:
-                print(f"Error searching for genre {genre_name}: {e}")
+                print(f"Search error for '{query}': {e}")
                 continue
-        candidate_pools.extend(genre_candidates)
         
-        # 2. Studio-based recommendations if user has clear preferences
-        studio_candidates = []
-        for studio_name, count in top_user_studios[:2]:
-            if count >= 2:  # Only if user has multiple anime from this studio
-                try:
-                    studio_results = self.mal_service.search_anime(f"{studio_name}", limit=6)
-                    studio_candidates.extend(studio_results)
-                except Exception as e:
-                    print(f"Error searching for studio {studio_name}: {e}")
-        candidate_pools.extend(studio_candidates)
+        # Step 4: Rank by relevance and select best matches
+        all_candidates.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        # 3. Score-range targeted search (20% of candidates)
-        try:
-            if avg_user_score >= 8.5:
-                score_results = self.mal_service.get_top_anime(limit=12)
-            elif avg_user_score >= 7.5:
-                score_results = self.mal_service.search_anime("popular anime", limit=12)
-            else:
-                score_results = self.mal_service.search_anime("good anime", limit=12)
-            candidate_pools.extend(score_results)
-        except Exception as e:
-            print(f"Error in score-targeted search: {e}")
+        # Step 5: Build final recommendations with diversity
+        final_recommendations = []
+        genre_counts = {}
         
-        # 4. Diversity searches (20% of candidates) - only if we have enough genre matches
-        if len(genre_candidates) < 30:  # Only add variety if genre search was limited
-            try:
-                variety_searches = [
-                    ("underrated anime", 6),
-                    ("hidden gems", 6), 
-                    ("recent anime", 6)
-                ]
-                for search_term, limit in variety_searches:
-                    variety_results = self.mal_service.search_anime(search_term, limit=limit)
-                    candidate_pools.extend(variety_results)
-            except Exception as e:
-                print(f"Error in variety search: {e}")
-        
-        # Remove duplicates while preserving order
-        seen_ids = set()
-        unique_candidates = []
-        for anime in candidate_pools:
-            anime_id = anime.get("mal_id")
-            if anime_id and anime_id not in seen_ids:
-                unique_candidates.append(anime)
-                seen_ids.add(anime_id)
-        
-        # Process all candidates
-        print(f"Processing {len(unique_candidates)} unique candidate anime...")
-        
-        for anime in unique_candidates:
-            anime_id = anime.get("mal_id")
-            if not anime_id or anime_id in user_anime_list or anime_id in seen_anime_ids:
-                continue
+        for anime in all_candidates:
+            if len(final_recommendations) >= max_recommendations:
+                break
             
-            seen_anime_ids.add(anime_id)
+            # Get primary genre for this anime
+            anime_genres = [g.get('name', '') for g in anime.get('genres', [])]
+            primary_genre = None
             
-            # Calculate comprehensive similarity score
-            try:
-                similarity_score = self.calculate_similarity_score(
-                    anime, user_genres, user_scores, user_popularity_scores, user_studios,
-                    avg_user_score, avg_user_popularity
-                )
-            except Exception as e:
-                print(f"Error calculating similarity for {anime.get('title', 'Unknown')}: {e}")
-                similarity_score = 0.1  # Default low score
+            # Find most relevant genre from user's preferences
+            for genre in anime_genres:
+                if genre in user_profile['genres']:
+                    primary_genre = genre
+                    break
             
-            # More flexible filtering - adjust thresholds for better results
-            anime_genres = {genre.get("name", "") for genre in anime.get("genres", []) if genre.get("name")}
-            has_genre_match = bool(anime_genres.intersection(set(user_genres.keys())))
+            if not primary_genre and anime_genres:
+                primary_genre = anime_genres[0]
             
-            # Adjusted thresholds to prevent empty results
-            if has_genre_match:
-                min_similarity = 0.25  # Lowered from 0.3
-            else:
-                min_similarity = 0.45  # Lowered from 0.6
-            
-            if similarity_score >= min_similarity:
-                # Check for NSFW content and filter it out
-                rating = anime.get("rating", "")
-                is_nsfw = self.is_nsfw_content(anime)
+            # Apply genre diversity (max 3 per genre)
+            current_count = genre_counts.get(primary_genre, 0)
+            if current_count < 3:
                 
-                if is_nsfw:
-                    print(f"Filtered NSFW content: {anime.get('title', 'Unknown')} (Rating: {rating})")
-                    continue  # Skip this anime
+                # Check for studio boost
+                anime_studios = [s.get('name', '') for s in anime.get('studios', [])]
+                studio_boost = 0.1 if any(s in preferred_studios for s in anime_studios) else 0
                 
-                # Generate recommendation reason
-                try:
-                    reason = self.generate_recommendation_reason(
-                        anime, user_genres, top_user_genres, top_user_studios, similarity_score
-                    )
-                except Exception as e:
-                    print(f"Error generating reason for {anime.get('title', 'Unknown')}: {e}")
-                    reason = "Recommended based on your preferences"
+                final_score = anime.get('relevance_score', 0) + studio_boost
                 
-                recommendations.append({
-                    "mal_id": anime_id,
+                # Generate reason
+                reason = self.generate_unique_reason(anime, user_profile, preferred_studios)
+                
+                recommendation = {
+                    "mal_id": anime.get("mal_id"),
                     "title": anime.get("title", "Unknown"),
                     "score": anime.get("score", 0),
-                    "genres": [g.get("name") for g in anime.get("genres", [])],
+                    "genres": anime_genres,
                     "year": anime.get("year"),
-                    "similarity_score": round(similarity_score, 3),
+                    "similarity_score": round(final_score, 3),
                     "reason": reason,
                     "image_url": anime.get("images", {}).get("jpg", {}).get("image_url"),
                     "synopsis": anime.get("synopsis", "")[:200] + "..." if anime.get("synopsis") else "",
@@ -266,18 +240,86 @@ class SimpleRecommendationEngine:
                     "duration": anime.get("duration"),
                     "rating": anime.get("rating"),
                     "source": anime.get("source"),
-                    "studios": [studio.get("name") for studio in anime.get("studios", [])],
-                    "aired": anime.get("aired", {}).get("string")
-                })
+                    "studios": anime_studios,
+                    "aired": anime.get("aired", {}).get("string"),
+                    "primary_genre": primary_genre,
+                    "genre_frequency": user_profile['genres'].get(primary_genre, 0),
+                    "found_via": anime.get('search_query', 'unknown')
+                }
+                
+                final_recommendations.append(recommendation)
+                genre_counts[primary_genre] = current_count + 1
         
-        # Sort by similarity score and return diverse results
-        recommendations.sort(key=lambda x: x["similarity_score"], reverse=True)
-        
-        # Ensure diversity by limiting same genre/studio recommendations
-        final_recommendations = self.ensure_diversity(recommendations, max_recommendations)
-        
-        print(f"Generated {len(final_recommendations)} recommendations")
+        print(f"Generated {len(final_recommendations)} unique recommendations")
         return final_recommendations
+    
+    def calculate_relevance_score(self, anime, user_profile):
+        """Calculate how relevant this anime is to the user's specific profile."""
+        score = 0.0
+        
+        # Genre matching (60% weight)
+        anime_genres = set(g.get('name', '') for g in anime.get('genres', []))
+        user_genres = set(user_profile['genres'].keys())
+        genre_overlap = anime_genres.intersection(user_genres)
+        
+        if genre_overlap:
+            # Weight by frequency in user's preferences
+            genre_weight = sum(user_profile['genres'][g] for g in genre_overlap)
+            total_user_genres = sum(user_profile['genres'].values())
+            score += (genre_weight / total_user_genres) * 0.6
+        
+        # Score compatibility (25% weight)
+        anime_score = anime.get('score', 0)
+        if anime_score > 0:
+            score_diff = abs(anime_score - user_profile['avg_score'])
+            if score_diff <= 0.5:
+                score += 0.25
+            elif score_diff <= 1.0:
+                score += 0.2
+            elif score_diff <= 1.5:
+                score += 0.15
+            else:
+                score += 0.05  # Small penalty for very different scores
+        
+        # Quality bonus (15% weight)
+        if anime_score >= 8.0:
+            score += 0.15
+        elif anime_score >= 7.5:
+            score += 0.1
+        elif anime_score >= 7.0:
+            score += 0.05
+        
+        return score
+    
+    def generate_unique_reason(self, anime, user_profile, preferred_studios):
+        """Generate a reason based on why this anime matches the user's unique profile."""
+        reasons = []
+        
+        # Check genre matches
+        anime_genres = set(g.get('name', '') for g in anime.get('genres', []))
+        user_genres = set(user_profile['genres'].keys())
+        genre_matches = list(anime_genres.intersection(user_genres))
+        
+        if len(genre_matches) >= 2:
+            reasons.append(f"Matches your {', '.join(genre_matches[:2])} preferences")
+        elif len(genre_matches) == 1:
+            reasons.append(f"Perfect {genre_matches[0]} match")
+        
+        # Check studio preference
+        anime_studios = [s.get('name', '') for s in anime.get('studios', [])]
+        for studio in anime_studios:
+            if studio in preferred_studios:
+                reasons.append(f"from your preferred {studio}")
+                break
+        
+        # Check score match
+        anime_score = anime.get('score', 0)
+        if abs(anime_score - user_profile['avg_score']) <= 0.5:
+            reasons.append(f"matches your taste ({anime_score:.1f}/10)")
+        elif anime_score >= 8.0:
+            reasons.append("highly rated")
+        
+        return " • ".join(reasons) if reasons else "recommended for your unique taste"
     
     def calculate_similarity_score(self, anime, user_genres, user_scores, user_popularity_scores, 
                                  user_studios, avg_user_score, avg_user_popularity):
